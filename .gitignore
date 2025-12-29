@@ -1,13 +1,40 @@
-# 忽略所有压缩包
-*.7z
-*.zip
-*.tar.gz
-*.rar
-# 忽略模型文件
+# Python 通用
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyTorch 特定
 *.pth
+*.pt
+*.pkl
 *.bin
-*.ckpt
-*.h5
-# 忽略其他超大文件
-*.iso
-*.img
+data/
+datasets/
+models/
+checkpoints/
+
+# IDE 配置
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 其他
+.DS_Store
