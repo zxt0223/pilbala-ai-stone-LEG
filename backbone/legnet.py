@@ -7,7 +7,7 @@ from collections import OrderedDict
 from .feature_pyramid_network import BackboneWithFPN
 
 # ==========================================
-# 1. 基础辅助模块
+# 1. 基础辅助模块 (保持不变)
 # ==========================================
 def get_norm(dim):
     return nn.BatchNorm2d(dim)
@@ -25,19 +25,17 @@ class Conv_Extra(nn.Module):
         return self.block(x)
 
 # ==========================================
-# 2. 核心算子模块 (Scharr, Gaussian, LoG)
+# 2. 核心算子模块 (Scharr, Gaussian, LoG) (保持不变)
 # ==========================================
 class Scharr(nn.Module):
     def __init__(self, channel, act_layer):
         super(Scharr, self).__init__()
-        # 定义 Scharr 算子核
         scharr_x = torch.tensor([[-3., 0., 3.], [-10., 0., 10.], [-3., 0., 3.]], dtype=torch.float32).unsqueeze(0).unsqueeze(0)
         scharr_y = torch.tensor([[-3., -10., -3.], [0., 0., 0.], [3., 10., 3.]], dtype=torch.float32).unsqueeze(0).unsqueeze(0)
         
         self.conv_x = nn.Conv2d(channel, channel, kernel_size=3, padding=1, groups=channel, bias=False)
         self.conv_y = nn.Conv2d(channel, channel, kernel_size=3, padding=1, groups=channel, bias=False)
         
-        # 固定权重，不可训练
         self.conv_x.weight.data = scharr_x.repeat(channel, 1, 1, 1)
         self.conv_y.weight.data = scharr_y.repeat(channel, 1, 1, 1)
         self.conv_x.weight.requires_grad = False
@@ -46,20 +44,13 @@ class Scharr(nn.Module):
         self.norm = get_norm(channel)
         self.act = act_layer()
         self.conv_extra = Conv_Extra(channel, act_layer)
-        
-        # [可视化] 初始化 debug 容器
         self.debug_feat = None
 
     def forward(self, x):
         edges_x = self.conv_x(x)
         edges_y = self.conv_y(x)
-        # 计算纯边缘强度 (不经过融合)
         scharr_edge = torch.sqrt(edges_x ** 2 + edges_y ** 2 + 1e-6)
-        
-        # >>>>> [关键] 埋点：保存纯边缘特征供可视化 (Pre-Fusion) <<<<<
         self.debug_feat = scharr_edge.detach() 
-        
-        # 后续正常处理 (归一化 -> 激活 -> 融合)
         scharr_edge = self.act(self.norm(scharr_edge))
         out = self.conv_extra(x + scharr_edge)
         return out
@@ -69,19 +60,16 @@ class Gaussian(nn.Module):
         super().__init__()
         self.feature_extra = feature_extra
         gaussian = self.gaussian_kernel(size, sigma)
-        # [DDP 修复] 使用 register_buffer
         self.register_buffer('gaussian_kernel_weight', gaussian.repeat(dim, 1, 1, 1))
         
         self.gaussian = nn.Conv2d(dim, dim, kernel_size=size, stride=1, padding=int(size // 2), groups=dim, bias=False)
         self.gaussian.weight.data = self.gaussian_kernel_weight
-        self.gaussian.weight.requires_grad = False  # 固定高斯核
+        self.gaussian.weight.requires_grad = False 
         
         self.norm = get_norm(dim)
         self.act = act_layer()
         if feature_extra:
             self.conv_extra = Conv_Extra(dim, act_layer)
-            
-        # [可视化] 初始化 debug 容器
         self.debug_feat = None
 
     def gaussian_kernel(self, size: int, sigma: float):
@@ -94,10 +82,7 @@ class Gaussian(nn.Module):
 
     def forward(self, x):
         edges_o = self.gaussian(x)
-        
-        # >>>>> [关键] 埋点：保存纯高斯热力图 (Pre-Fusion) <<<<<
         self.debug_feat = edges_o.detach()
-        
         gaussian = self.act(self.norm(edges_o))
         if self.feature_extra:
             out = self.conv_extra(x + gaussian)
@@ -110,7 +95,6 @@ class LoGFilter(nn.Module):
         super(LoGFilter, self).__init__()
         self.conv_init = nn.Conv2d(in_c, out_c, kernel_size=7, stride=1, padding=3)
         
-        # [警告修复] 显式指定 indexing='ij'
         ax = torch.arange(-(kernel_size // 2), (kernel_size // 2) + 1, dtype=torch.float32)
         xx, yy = torch.meshgrid(ax, ax, indexing='ij')
         
@@ -137,7 +121,7 @@ class LoGFilter(nn.Module):
         return x
 
 # ==========================================
-# 3. 网络结构组件 (LFEA, DRFD, LFE_Module)
+# 3. 网络结构组件 (保持不变)
 # ==========================================
 class DRFD(nn.Module):
     def __init__(self, dim, act_layer):
@@ -200,50 +184,44 @@ class LFE_Module(nn.Module):
             get_norm(mlp_hidden_dim), act_layer(),
             nn.Conv2d(mlp_hidden_dim, dim, 1, bias=False))
         
-        # [真消融] 真正可选的 LFEA
+        # 可选 LFEA
         if self.use_lfea:
             self.LFEA = LFEA(dim, act_layer)
         else:
             self.LFEA = None
 
-        # [真消融] 真正可选的 Scharr 和 Gaussian (设为 None)
+        # 可选 Scharr / Gaussian
         if stage == 0:
             if use_scharr:
                 self.edge_extractor = Scharr(dim, act_layer)
             else:
-                self.edge_extractor = None  # No Scharr = 该分支不存在
-            
-            # [改进] 智能初始化，避免梯度为 0
+                self.edge_extractor = None 
             self.scharr_weight = nn.Parameter(torch.tensor([0.1])) 
         else:
             if use_gaussian:
                 self.gaussian = Gaussian(dim, 5, 1.0, act_layer)
             else:
-                self.gaussian = None  # No Gaussian = 该分支不存在
+                self.gaussian = None
                 
         self.norm = get_norm(dim)
 
     def forward(self, x: Tensor) -> Tensor:
-        # Stage 0: 处理边缘 (Scharr)
+        # Stage 0: Scharr
         if self.stage == 0:
             if self.edge_extractor is not None:
                 att = self.edge_extractor(x)
                 x_att = x + self.scharr_weight * att
             else:
-                # [真消融] No Scharr 模式：直接透传
                 x_att = x 
-        
-        # Stage 1-3: 处理高斯 (Gaussian)
+        # Stage 1-3: Gaussian
         else:
             if self.gaussian is not None:
                 att = self.gaussian(x)
                 if self.use_lfea:
                     x_att = self.LFEA(x, att)
                 else:
-                    # [真消融] No LFEA 模式：直接相加
                     x_att = x + att 
             else:
-                # [真消融] No Gaussian 模式
                 x_att = x 
             
         x = x + self.norm(self.drop_path(self.mlp(x_att)))
@@ -274,6 +252,7 @@ class Stem(nn.Module):
             nn.Conv2d(out_c12, out_c12, kernel_size=3, stride=2, padding=1, groups=out_c12),
             get_norm(out_c12))
         
+        # 可选 LoG
         if self.use_log:
             self.LoG = LoGFilter(in_chans, out_c14, 7, 1.0, act_layer)
         else:
@@ -294,7 +273,7 @@ class Stem(nn.Module):
         return x
 
 # ==========================================
-# 4. 主网络 LWEGNet
+# 4. 主网络 LWEGNet (保持不变)
 # ==========================================
 class LWEGNet(nn.Module):
     def __init__(self, in_chans=3, stem_dim=32, depths=(1, 4, 4, 2), act_layer=nn.ReLU, 
@@ -317,13 +296,11 @@ class LWEGNet(nn.Module):
                 stages_list.append(DRFD(dim=dim, act_layer=act_layer))
         self.stages = nn.Sequential(*stages_list)
         
-        # 权重加载
         if pretrained:
             self._load_pretrained_weights(pretrained)
         else:
             self.apply(self._init_weights)
 
-        # 冻结层逻辑
         if trainable_layers < 5:
             self._freeze_stages(trainable_layers)
 
@@ -372,35 +349,59 @@ class LWEGNet(nn.Module):
         return outs
 
 # ==========================================
-# 5. 对外接口 legnet_fpn_backbone
+# 5. 对外接口 legnet_fpn_backbone (核心修改)
 # ==========================================
 def legnet_fpn_backbone(pretrain_path="", ablation_mode="full", trainable_layers=3, **kwargs):
-    # 默认配置
+    """
+    ablation_mode 支持模式:
+    1. 'baseline': 所有模块关闭
+    2. 'plus_scharr': 在 baseline 基础上加 Scharr
+    3. 'plus_scharr_log': 在上一步基础上加 LoG
+    4. 'plus_scharr_log_gauss': 在上一步基础上加 Gaussian
+    5. 'full': 完整模型 (全开)
+    """
+    
+    # 默认全开
     use_log = True
     use_scharr = True
     use_gaussian = True
     use_lfea = True
     
-    # === 智能模式切换逻辑 ===
     mode = str(ablation_mode).lower().strip()
-    
+    print(f"!!! [LEGNet Config] Ablation Mode: {mode.upper()} !!!")
+
+    # === 累加式消融逻辑 ===
     if mode == "baseline":
         use_log = False; use_scharr = False; use_gaussian = False; use_lfea = False
-        print(f"!!! [LEGNet] Mode: BASELINE (All Modules Disabled) !!!")
+        print(" -> Configuration: All Modules DISABLED (Plain CNN)")
+        
+    elif mode == "plus_scharr":
+        use_log = False; use_scharr = True; use_gaussian = False; use_lfea = False
+        print(" -> Configuration: Scharr ENABLED")
+        
+    elif mode == "plus_scharr_log":
+        use_log = True; use_scharr = True; use_gaussian = False; use_lfea = False
+        print(" -> Configuration: Scharr + LoG ENABLED")
+        
+    elif mode == "plus_scharr_log_gauss":
+        use_log = True; use_scharr = True; use_gaussian = True; use_lfea = False
+        print(" -> Configuration: Scharr + LoG + Gaussian ENABLED")
+        
+    elif mode == "full":
+        use_log = True; use_scharr = True; use_gaussian = True; use_lfea = True
+        print(" -> Configuration: FULL MODEL (All Enabled)")
+        
+    # 兼容旧代码的逻辑 (减法逻辑)
     elif mode == "no_log":
         use_log = False
-        print(f"!!! [LEGNet] Mode: NO LoG (LoG -> Conv) !!!")
     elif mode == "no_scharr":
         use_scharr = False
-        print(f"!!! [LEGNet] Mode: NO Scharr (Branch Removed) !!!")
     elif mode == "no_gaussian":
         use_gaussian = False
-        print(f"!!! [LEGNet] Mode: NO Gaussian (Branch Removed) !!!")
     elif mode == "no_lfea":
         use_lfea = False
-        print(f"!!! [LEGNet] Mode: NO LFEA (Use Add) !!!")
     else:
-        print(f"!!! [LEGNet] Mode: FULL (All Modules Enabled) !!!")
+        print("[Warning] Unknown mode, using FULL config.")
 
     stem_dim = 32
     
