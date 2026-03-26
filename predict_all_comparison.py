@@ -149,8 +149,8 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Predict newly retrained LEGNet models")
-    parser.add_argument('--input-dir', default='./test_image', help='测试图片文件夹')
-    parser.add_argument('--output-dir', default='./comparison_results_new', help='结果保存路径')
+    parser.add_argument('--input-dir', default='/group/chenjinming/wyy/pytorch-pilipala-LEG/test_image', help='测试图片文件夹')
+    parser.add_argument('--output-dir', default='/group/chenjinming/wyy/pytorch-pilipala-LEG/comparison_results_new', help='结果保存路径')
     # 你的权重根目录
     parser.add_argument('--checkpoints-dir', default='./zxt_checkpoints', help='权重根目录') 
     # 建议设低一点，让Baseline暴露出更多误检，对比更强烈

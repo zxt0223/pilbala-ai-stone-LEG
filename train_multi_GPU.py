@@ -38,7 +38,7 @@ def create_model(num_classes, load_pretrain_weights=True, backbone_name="legnet"
         # ablation_mode 会传递给 LEGNet 内部去控制开关
         backbone = legnet_fpn_backbone(pretrain_path="./LWEGNet_tiny.pth", 
                                        ablation_mode=ablation_mode,
-                                       trainable_layers=3) # 支持冻结层
+                                       trainable_layers=5) # 支持冻结层
         print(f">> Using Backbone: LEGNet | Mode: {ablation_mode}")
     else:
         raise ValueError(f"Unknown backbone: {backbone_name}")
@@ -85,7 +85,7 @@ def main(args):
             transforms.RandomHorizontalFlip(0.5),
             transforms.RandomVerticalFlip(0.5),
             transforms.RandomColorJitter(brightness=0.3, contrast=0.3, prob=0.5),
-            transforms.RandomGaussianBlur(prob=0.3) # 你的数据增强里有高斯模糊
+            transforms.RandomGaussianBlur(prob=0.5) # 你的数据增强里有高斯模糊
         ]),
         "val": transforms.Compose([transforms.ToTensor()])
     }
